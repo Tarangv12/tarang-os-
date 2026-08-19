@@ -52,39 +52,66 @@ loadEnvFile(path.join(PROJECT_ROOT, '.env'));
 const POOLED_KEYS = ['DATABASE_URL', 'POSTGRES_PRISMA_URL', 'POSTGRES_URL'];
 const DIRECT_KEYS = ['DIRECT_URL', 'DATABASE_URL_UNPOOLED', 'POSTGRES_URL_NON_POOLING'];
 
-function firstSetEnv(keys: string[]): string | undefined {
+const PLACEHOLDER_HOSTS = new Set(['host', 'hostname', 'your-host', 'your-db-host', 'example.com']);
+
+const IS_SERVERLESS = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY,
+);
+
+/** Why this string cannot be a real database, or null if it looks usable. */
+function placeholderReason(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'it is not a valid connection URL';
+  }
+  if (PLACEHOLDER_HOSTS.has(parsed.hostname)) return `its host is literally "${parsed.hostname}"`;
+  if (parsed.username === 'user' && parsed.password === 'password') return 'it has the example credentials';
+  if (IS_SERVERLESS && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')) {
+    return 'it points at localhost, which on serverless is the function itself';
+  }
+  return null;
+}
+
+/**
+ * First variable holding a usable connection string.
+ *
+ * Unusable values are skipped rather than accepted, so a leftover placeholder in
+ * DATABASE_URL cannot hide a real connection injected under another name.
+ */
+function firstUsableEnv(keys: string[]): string | undefined {
   for (const key of keys) {
-    const value = process.env[key];
-    if (value && value.trim()) return value.trim();
+    const value = process.env[key]?.trim();
+    if (!value) continue;
+    if (placeholderReason(value)) continue;
+    return value;
   }
   return undefined;
 }
 
-const resolvedDatabaseUrl = firstSetEnv(POOLED_KEYS);
+const resolvedDatabaseUrl = firstUsableEnv(POOLED_KEYS);
 
 if (!resolvedDatabaseUrl) {
   throw new Error(
-    `No database connection string found.
-  Looked for: ${POOLED_KEYS.join(', ')}
-  TarangOS stores your data in Postgres. On Vercel the quickest route is
-  Storage -> Create Database -> Neon, which sets these variables for you.
-  Otherwise paste a connection string from neon.tech or supabase.com.`,
+    `No usable database connection string.
+  Looked at: ${POOLED_KEYS.join(', ')}
+  TarangOS stores your data in Postgres. On Vercel: Storage -> Create Database ->
+  Neon wires this up for you. Remove any placeholder DATABASE_URL you set by hand.`,
   );
 }
 
 // Prisma needs a direct (unpooled) connection for migrations, because a
 // transaction pooler cannot run them. Most setups have one URL that does both.
 process.env.DATABASE_URL = resolvedDatabaseUrl;
-process.env.DIRECT_URL = firstSetEnv(DIRECT_KEYS) ?? resolvedDatabaseUrl;
+process.env.DIRECT_URL = firstUsableEnv(DIRECT_KEYS) ?? resolvedDatabaseUrl;
 
 /**
  * Serverless platforms (Vercel, Netlify, Lambda) give you a read-only
  * filesystem apart from /tmp, and /tmp is wiped between invocations. Anything
  * that assumes durable local storage has to be switched off there.
  */
-export const IS_SERVERLESS = Boolean(
-  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY,
-);
+export { IS_SERVERLESS };
 
 export const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
