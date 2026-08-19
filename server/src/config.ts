@@ -41,23 +41,41 @@ loadEnvFile(path.join(SERVER_ROOT, '.env'));
 loadEnvFile(path.join(PROJECT_ROOT, '.env'));
 
 /**
- * Prisma needs a direct (unpooled) connection for migrations, because a
- * transaction pooler cannot run them. Most setups have only one URL, so default
- * it to the main one rather than making everyone define the same string twice.
+ * Resolve the database connection.
+ *
+ * Vercel's database integrations (Neon, Supabase, Vercel Postgres) inject their
+ * own variable names, so we accept those rather than requiring you to copy
+ * values into DATABASE_URL by hand. Mirrors scripts/dbEnv.mjs, which does the
+ * same at build time for `prisma migrate deploy` — the Prisma CLI reads the
+ * environment directly and never goes through this file.
  */
-if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
-  process.env.DIRECT_URL = process.env.DATABASE_URL;
+const POOLED_KEYS = ['DATABASE_URL', 'POSTGRES_PRISMA_URL', 'POSTGRES_URL'];
+const DIRECT_KEYS = ['DIRECT_URL', 'DATABASE_URL_UNPOOLED', 'POSTGRES_URL_NON_POOLING'];
+
+function firstSetEnv(keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
-if (!process.env.DATABASE_URL) {
+const resolvedDatabaseUrl = firstSetEnv(POOLED_KEYS);
+
+if (!resolvedDatabaseUrl) {
   throw new Error(
-    'DATABASE_URL is not set.\n' +
-      '  TarangOS stores your data in Postgres. Set a connection string, for example:\n' +
-      '    DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"\n' +
-      '  Free managed options that work well with serverless: Neon, Supabase, Vercel Postgres.\n' +
-      '  For local development you can also run Postgres in Docker.',
+    `No database connection string found.
+  Looked for: ${POOLED_KEYS.join(', ')}
+  TarangOS stores your data in Postgres. On Vercel the quickest route is
+  Storage -> Create Database -> Neon, which sets these variables for you.
+  Otherwise paste a connection string from neon.tech or supabase.com.`,
   );
 }
+
+// Prisma needs a direct (unpooled) connection for migrations, because a
+// transaction pooler cannot run them. Most setups have one URL that does both.
+process.env.DATABASE_URL = resolvedDatabaseUrl;
+process.env.DIRECT_URL = firstSetEnv(DIRECT_KEYS) ?? resolvedDatabaseUrl;
 
 /**
  * Serverless platforms (Vercel, Netlify, Lambda) give you a read-only

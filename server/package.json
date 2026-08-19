@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "db:push": "prisma db push --skip-generate && prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
+    "db:deploy": "node scripts/deployDb.mjs",
     "db:studio": "prisma studio",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/notifications.test.mjs && node test/abuse.test.mjs",

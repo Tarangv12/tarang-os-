@@ -145,13 +145,25 @@ housekeeping runs from Vercel Cron instead of an in-process timer.
 
 ### 1. Create a Postgres database
 
-Any provider works. [Neon](https://neon.tech) and [Supabase](https://supabase.com) both have
-free tiers suited to serverless. Copy two connection strings:
+**Easiest — from inside Vercel.** Open your project, go to the **Storage** tab, choose
+**Create Database → Neon** (free tier), and connect it. Vercel injects the connection
+variables into the project automatically and TarangOS reads whichever names it finds — there is
+nothing to copy.
 
-- **Pooled** → `DATABASE_URL` (what the app uses)
-- **Direct / unpooled** → `DIRECT_URL` (migrations only — they cannot run through a pooler)
+**Or bring your own.** Create a database at [Neon](https://neon.tech) or
+[Supabase](https://supabase.com) and set these yourself:
 
-If your provider gives you one URL, use it for both.
+| Variable | Which string |
+| --- | --- |
+| `DATABASE_URL` | pooled — what the app uses at runtime |
+| `DIRECT_URL` | direct / unpooled — migrations only, since a pooler cannot run them |
+
+If your provider gives you one URL, use it for both. These are also read from the names the
+Vercel integrations use (`POSTGRES_PRISMA_URL`, `POSTGRES_URL_NON_POOLING`,
+`DATABASE_URL_UNPOOLED`), so either style works.
+
+> Do not paste the example string from `.env.example`. Its host is literally `host`, and the
+> build stops with a message telling you so rather than a confusing connection timeout.
 
 ### 2. Generate your secrets
 
@@ -173,8 +185,8 @@ Add these environment variables in **Project → Settings → Environment Variab
 
 | Variable | Value |
 | --- | --- |
-| `DATABASE_URL` | pooled Postgres URL |
-| `DIRECT_URL` | direct Postgres URL |
+| `DATABASE_URL` | pooled Postgres URL — set for you if you used Storage → Create Database |
+| `DIRECT_URL` | direct Postgres URL — same note |
 | `ENCRYPTION_KEY` | from step 2 |
 | `SESSION_PEPPER` | from step 2 |
 | `CRON_SECRET` | from step 2 |
@@ -707,9 +719,14 @@ four taps instead of a full password.
 Occurrences are generated 30 days ahead whenever the dashboard loads and every 15 minutes by the
 scheduler. Force it from Settings, or restart the server.
 
+**Vercel build fails with `P1001: Can't reach database server at host:5432`.**
+The connection string is still the placeholder from `.env.example` — note the host is literally
+`host`. Create a real database (Storage → Create Database → Neon is quickest) and redeploy.
+Newer builds catch this before Prisma runs and say so directly.
+
 **Vercel build fails with "Environment variable not found: DATABASE_URL".**
-The build runs migrations, so `DATABASE_URL` and `DIRECT_URL` must exist at build time as well
-as runtime. Make sure both are set for the Production environment, then redeploy.
+The build runs migrations, so the database variables must exist at build time as well as
+runtime. Make sure they are set for the Production environment, then redeploy.
 
 **Vercel deploy succeeds but every request 500s.**
 Check the function logs. The two usual causes are missing `ENCRYPTION_KEY`/`SESSION_PEPPER`
