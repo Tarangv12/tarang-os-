@@ -1353,7 +1353,9 @@ function DataSection() {
           title="Backups"
           subtitle={
             backupData
-              ? `${backupData.autoDaily ? 'Automatic daily backups are on. ' : ''}Keeping the newest ${backupData.keep} of each kind.`
+              ? backupData.fileBackupsAvailable
+                ? `${backupData.autoDaily ? 'Automatic daily backups are on. ' : ''}Keeping the newest ${backupData.keep} of each kind.`
+                : 'This deployment has no persistent disk, so use Export above to keep a copy.'
               : undefined
           }
           icon={<HardDrive className="h-4 w-4" />}
@@ -1362,21 +1364,38 @@ function DataSection() {
               <Button size="xs" variant="outline" icon={<UploadCloud className="h-3.5 w-3.5" />} onClick={() => setRestoreOpen(true)}>
                 Restore
               </Button>
-              <Button size="xs" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={createBackup} loading={busy === 'create'}>
-                Back up now
-              </Button>
+              {backupData?.fileBackupsAvailable !== false && (
+                <Button size="xs" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={createBackup} loading={busy === 'create'}>
+                  Back up now
+                </Button>
+              )}
             </div>
           }
         />
         <div className="p-4 pt-3">
-          {backupData?.directory && (
+          {backupData?.fileBackupsAvailable === false && (
+            <div className="mb-3 rounded-xl border border-info/25 bg-info/[0.06] p-3 text-xs leading-relaxed text-info">
+              Server-side backup files are unavailable here, because this deployment has no disk that survives between
+              requests. Your data itself is safe in the database — use <strong>Full export (JSON)</strong> above to keep
+              your own copy, and Restore to bring one back.
+            </div>
+          )}
+          {backupData?.directory && backupData.fileBackupsAvailable && (
             <p className="mb-3 truncate rounded-lg bg-subtle px-3 py-2 font-mono text-2xs text-muted">{backupData.directory}</p>
           )}
 
           {!backupData ? (
             <Skeleton className="h-24" />
           ) : backupData.backups.length === 0 ? (
-            <EmptyState compact title="No backups yet" description="Create one now, or wait for the automatic daily backup." />
+            <EmptyState
+              compact
+              title="No backups yet"
+              description={
+                backupData.fileBackupsAvailable
+                  ? 'Create one now, or wait for the automatic daily backup.'
+                  : 'Use Full export (JSON) above to download a backup.'
+              }
+            />
           ) : (
             <ul className="max-h-72 space-y-1.5 overflow-y-auto">
               {backupData.backups.map((backup) => (

@@ -40,21 +40,52 @@ function loadEnvFile(file: string): void {
 loadEnvFile(path.join(SERVER_ROOT, '.env'));
 loadEnvFile(path.join(PROJECT_ROOT, '.env'));
 
-if (!process.env.DATABASE_URL) {
-  process.env.DATABASE_URL = 'file:../../data/tarangos.db';
+/**
+ * Prisma needs a direct (unpooled) connection for migrations, because a
+ * transaction pooler cannot run them. Most setups have only one URL, so default
+ * it to the main one rather than making everyone define the same string twice.
+ */
+if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
+  process.env.DIRECT_URL = process.env.DATABASE_URL;
 }
+
+if (!process.env.DATABASE_URL) {
+  throw new Error(
+    'DATABASE_URL is not set.\n' +
+      '  TarangOS stores your data in Postgres. Set a connection string, for example:\n' +
+      '    DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"\n' +
+      '  Free managed options that work well with serverless: Neon, Supabase, Vercel Postgres.\n' +
+      '  For local development you can also run Postgres in Docker.',
+  );
+}
+
+/**
+ * Serverless platforms (Vercel, Netlify, Lambda) give you a read-only
+ * filesystem apart from /tmp, and /tmp is wiped between invocations. Anything
+ * that assumes durable local storage has to be switched off there.
+ */
+export const IS_SERVERLESS = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY,
+);
 
 export const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.resolve(PROJECT_ROOT, 'data');
+  : IS_SERVERLESS
+    ? '/tmp/tarangos'
+    : path.resolve(PROJECT_ROOT, 'data');
 
 export const BACKUP_DIR = path.resolve(DATA_DIR, 'backups');
 export const WEB_DIST = process.env.WEB_DIST
   ? path.resolve(process.env.WEB_DIST)
   : path.resolve(PROJECT_ROOT, 'web', 'dist');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(BACKUP_DIR, { recursive: true });
+// Creating these must never take the process down on a read-only filesystem.
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+} catch {
+  /* serverless: no writable data directory, and none is needed */
+}
 
 type Secrets = { encryptionKey: string; sessionPepper: string };
 
@@ -65,6 +96,22 @@ function loadSecrets(): Secrets {
   };
   if (fromEnv.encryptionKey && fromEnv.sessionPepper) {
     return fromEnv as Secrets;
+  }
+
+  /**
+   * On serverless there is nowhere durable to keep a generated secret. If one
+   * were invented per cold start, SESSION_PEPPER would change underneath the
+   * stored password hash and you would be locked out of your own account at
+   * random. Failing loudly at boot is far kinder than that.
+   */
+  if (IS_SERVERLESS) {
+    throw new Error(
+      'ENCRYPTION_KEY and SESSION_PEPPER must be set as environment variables on a ' +
+        'serverless deployment.\n' +
+        'Generate them once and add them to your project settings:\n' +
+        "  node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"\n" +
+        'They must never change afterwards — SESSION_PEPPER is mixed into your password hash.',
+    );
   }
 
   const file = path.join(DATA_DIR, '.secrets.json');
@@ -110,12 +157,18 @@ function int(value: string | undefined, fallback: number): number {
 export const config = {
   env: process.env.NODE_ENV || 'development',
   isProd: (process.env.NODE_ENV || 'development') === 'production',
+  isServerless: IS_SERVERLESS,
+  /** Whether backups can be written to disk and still be there tomorrow. */
+  hasPersistentDisk: !IS_SERVERLESS,
   port: int(process.env.PORT, 4517),
   host: process.env.HOST || '0.0.0.0',
 
   dataDir: DATA_DIR,
   backupDir: BACKUP_DIR,
   webDist: WEB_DIST,
+
+  /** Shared secret for the scheduled housekeeping endpoint. */
+  cronSecret: process.env.CRON_SECRET || '',
 
   encryptionKey: Buffer.from(secrets.encryptionKey, 'hex').subarray(0, 32),
   sessionPepper: secrets.sessionPepper,
@@ -152,7 +205,8 @@ export const config = {
   },
 
   backup: {
-    autoDaily: bool(process.env.AUTO_BACKUP, true),
+    // Writing daily backup files is pointless without a disk that survives.
+    autoDaily: bool(process.env.AUTO_BACKUP, true) && !IS_SERVERLESS,
     keep: int(process.env.BACKUP_KEEP, 30),
   },
 

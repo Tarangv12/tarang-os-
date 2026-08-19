@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { clientIp, userAgent } from '../lib/net';
 import {
   blockedFor,
+  blockedForShared,
   isScannerProbe,
   looksAutomated,
   noteBlockedHit,
@@ -21,10 +22,18 @@ function retryAfterSeconds(ms: number): number {
   return Math.max(1, Math.ceil(ms / 1000));
 }
 
-/** Rejects sources that are currently blocked. Cheap enough to run on every request. */
-export function blockGuard(req: Request, res: Response, next: NextFunction) {
+/**
+ * Rejects sources that are currently blocked.
+ *
+ * Checks this instance's memory first and only consults the shared record when
+ * that comes up empty, so the common path stays a map lookup.
+ */
+export async function blockGuard(req: Request, res: Response, next: NextFunction) {
   const ip = clientIp(req);
-  const remaining = blockedFor(ip);
+  let remaining = blockedFor(ip);
+  if (remaining <= 0) {
+    remaining = await blockedForShared(ip).catch(() => 0);
+  }
   if (remaining <= 0) return next();
 
   void noteBlockedHit(ip);

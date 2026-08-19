@@ -652,6 +652,8 @@ export function useBackups() {
       directory: string;
       autoDaily: boolean;
       keep: number;
+      /** False on deployments with no persistent disk (e.g. serverless). */
+      fileBackupsAvailable: boolean;
     }>(keys.backups, '/backup', { staleTime: 30_000 }),
   );
 }

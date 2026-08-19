@@ -64,7 +64,12 @@ notesRouter.get(
     if (q.goalId) where.goalId = q.goalId;
     if (q.projectId) where.projectId = q.projectId;
     if (q.search) {
-      where.OR = [{ title: { contains: q.search } }, { content: { contains: q.search } }];
+      // Postgres `contains` is case-sensitive by default; SQLite's was not.
+      // Without the mode flag, searching "gym" would stop finding "Gym".
+      where.OR = [
+        { title: { contains: q.search, mode: 'insensitive' } },
+        { content: { contains: q.search, mode: 'insensitive' } },
+      ];
     }
 
     const notes = await prisma.note.findMany({

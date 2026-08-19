@@ -10,12 +10,14 @@ import cookieParser from 'cookie-parser';
 
 import { config } from './config';
 import { closeDatabase, initDatabase } from './lib/db';
-import { errorHandler, notFoundHandler } from './lib/errors';
+import { ah, errorHandler, notFoundHandler } from './lib/errors';
 import { loadSession, originGuard } from './middleware/auth';
 import { apiLimiter } from './middleware/rateLimit';
 import { blockGuard, botHint, offenceWatcher, scannerTrap } from './middleware/abuse';
 import { loadBlocks } from './lib/abuse';
-import { startScheduler, stopScheduler } from './scheduler';
+import { safeEqual } from './lib/crypto';
+import { audit } from './lib/audit';
+import { runHousekeeping, startScheduler, stopScheduler } from './scheduler';
 
 import { authRouter } from './routes/auth';
 import { tasksRouter } from './routes/tasks';
@@ -108,6 +110,32 @@ export function createApp() {
   app.use('/api/analytics', analyticsRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/backup', backupRouter);
+
+  /**
+   * Scheduled housekeeping.
+   *
+   * A long-running server runs this on a timer. Serverless functions do not
+   * exist between requests, so there is no timer to run — the platform's cron
+   * calls this endpoint instead. Guarded by a shared secret because it is
+   * reachable from the internet.
+   */
+  app.all(
+    '/api/cron/housekeeping',
+    ah(async (req: express.Request, res: express.Response) => {
+      const provided =
+        (req.get('authorization') || '').replace(/^Bearer\s+/i, '') ||
+        String(req.query.secret || '');
+
+      if (!config.cronSecret || !provided || !safeEqual(provided, config.cronSecret)) {
+        audit(req, 'cron.denied', { ok: false });
+        res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Invalid cron secret' } });
+        return;
+      }
+
+      const result = await runHousekeeping();
+      res.json({ ok: true, ...result });
+    }),
+  );
 
   app.use('/api', notFoundHandler);
 

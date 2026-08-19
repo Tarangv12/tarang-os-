@@ -1,4 +1,5 @@
 import { prisma } from './db';
+import { config } from '../config';
 import { isLoopback } from './net';
 
 /**
@@ -95,6 +96,54 @@ export function isBlocked(ip: string): boolean {
 }
 
 /**
+ * How long a source is blocked for, consulting the database when this instance
+ * has not seen it.
+ *
+ * On one long-running server the in-memory map is authoritative and this costs
+ * nothing extra. Across serverless functions it is the difference between a
+ * block that works and one an attacker escapes by landing on a cold instance.
+ *
+ * A short negative cache keeps the common case — an ordinary request from an
+ * unblocked source — free of database round trips.
+ */
+const NEGATIVE_CACHE_MS = 10_000;
+const notBlockedUntil = new Map<string, number>();
+
+export async function blockedForShared(ip: string): Promise<number> {
+  const local = blockedFor(ip);
+  if (local > 0) return local;
+  if (!ip || isLoopback(ip)) return 0;
+
+  // Single-instance deployments already hold the full picture in memory.
+  if (!config.isServerless) return 0;
+
+  const now = Date.now();
+  const cachedClear = notBlockedUntil.get(ip);
+  if (cachedClear && cachedClear > now) return 0;
+
+  try {
+    const row = await prisma.blockedIp.findUnique({
+      where: { ip },
+      select: { expiresAt: true, strikes: true },
+    });
+
+    if (!row || row.expiresAt.getTime() <= now) {
+      notBlockedUntil.set(ip, now + NEGATIVE_CACHE_MS);
+      if (notBlockedUntil.size > 5000) notBlockedUntil.clear();
+      return 0;
+    }
+
+    // Adopt the shared verdict locally so subsequent hits are free.
+    blocked.set(ip, row.expiresAt.getTime());
+    strikeCount.set(ip, row.strikes);
+    return row.expiresAt.getTime() - now;
+  } catch {
+    // A database blip must not lock everyone out of their own app.
+    return 0;
+  }
+}
+
+/**
  * Records an offence and blocks the source once it has done enough of them.
  * Returns the block duration in ms when this offence triggered one.
  *
@@ -131,9 +180,11 @@ export function blockIp(ip: string, reason: string, detail = '', userAgent = '')
   const minutes = BLOCK_MINUTES[strikes - 1];
   const expiresAt = new Date(Date.now() + minutes * 60_000);
 
-  // Enforce first.
+  // Enforce first, and drop any "recently seen as clean" note for this source
+  // so the new block is not shadowed by the negative cache.
   blocked.set(ip, expiresAt.getTime());
   strikeCount.set(ip, strikes);
+  notBlockedUntil.delete(ip);
 
   // Then persist, without holding up the response.
   void prisma.blockedIp
@@ -178,6 +229,7 @@ export async function unblockIp(ip: string): Promise<boolean> {
   blocked.delete(ip);
   recent.delete(ip);
   strikeCount.delete(ip);
+  notBlockedUntil.delete(ip);
   const result = await prisma.blockedIp.deleteMany({ where: { ip } });
   return result.count > 0;
 }
@@ -186,6 +238,7 @@ export async function unblockAll(): Promise<number> {
   blocked.clear();
   recent.clear();
   strikeCount.clear();
+  notBlockedUntil.clear();
   const result = await prisma.blockedIp.deleteMany({});
   return result.count;
 }
@@ -217,6 +270,7 @@ export function resetAbuseState(): void {
   recent.clear();
   blocked.clear();
   strikeCount.clear();
+  notBlockedUntil.clear();
 }
 
 // ---------------------------------------------------------------------------

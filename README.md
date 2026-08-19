@@ -1,9 +1,10 @@
 # TarangOS
 
-A private, secure, local-first personal productivity system — tasks, habits, focus, goals,
-reviews and years of trustworthy history, running entirely on your own machine.
+A private, secure personal productivity system — tasks, habits, focus, goals, reviews and
+years of trustworthy history.
 
-One account. No sign-up page. No cloud. No telemetry.
+One account. No sign-up page. No telemetry. Deploy it to Vercel for access from your phone
+around the clock, or self-host it and keep every byte on your own hardware.
 
 ---
 
@@ -12,6 +13,7 @@ One account. No sign-up page. No cloud. No telemetry.
 - [What it does](#what-it-does)
 - [Quick start](#quick-start)
 - [Using it from your phone](#using-it-from-your-phone)
+- [Deploying to Vercel](#deploying-to-vercel)
 - [Deploying to your own server](#deploying-to-your-own-server)
 - [Daily notifications](#daily-notifications)
 - [Turning on HTTPS](#turning-on-https)
@@ -73,18 +75,14 @@ evening check on unfinished important work and a review nudge. See
 
 ## Quick start
 
-### Option A — Docker (recommended)
+TarangOS needs a Postgres database. For local development the quickest options are a free
+[Neon](https://neon.tech) branch, or Postgres in a container:
 
 ```bash
-docker compose up -d
+docker run -d --name tarangos-db -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
 ```
 
-Open **http://localhost:4517** and create your account. That is the whole setup.
-
-Your data lives in `./data` next to the compose file. Back up that folder and you have backed
-up everything: the database, the backups, and the generated secrets.
-
-### Option B — Node directly (no Docker)
+Then copy `.env.example` to `.env` and set `DATABASE_URL` and `DIRECT_URL`.
 
 Requires Node.js 20 or newer.
 
@@ -136,12 +134,91 @@ Your Windows or macOS firewall may prompt the first time — allow it on **priva
 
 ---
 
+## Deploying to Vercel
+
+TarangOS runs on Vercel, with one requirement: **the database has to live somewhere else.**
+
+Serverless functions have no durable disk and no memory between requests. Everything that
+assumed one has been adapted — the database is Postgres, secrets come from environment
+variables, rate limits and IP blocks are shared through the database, and scheduled
+housekeeping runs from Vercel Cron instead of an in-process timer.
+
+### 1. Create a Postgres database
+
+Any provider works. [Neon](https://neon.tech) and [Supabase](https://supabase.com) both have
+free tiers suited to serverless. Copy two connection strings:
+
+- **Pooled** → `DATABASE_URL` (what the app uses)
+- **Direct / unpooled** → `DIRECT_URL` (migrations only — they cannot run through a pooler)
+
+If your provider gives you one URL, use it for both.
+
+### 2. Generate your secrets
+
+```bash
+node -e "console.log('ENCRYPTION_KEY='+require('crypto').randomBytes(32).toString('hex'));console.log('SESSION_PEPPER='+require('crypto').randomBytes(32).toString('hex'));console.log('CRON_SECRET='+require('crypto').randomBytes(24).toString('hex'))"
+```
+
+> `SESSION_PEPPER` is mixed into your password hash. Set it once and never change it — if it
+> changes, your password stops working and you are locked out of your own account. TarangOS
+> refuses to start on serverless without these rather than inventing new ones per cold start,
+> which is exactly what that lockout would look like.
+
+### 3. Import the repo into Vercel
+
+Point Vercel at this repository. `vercel.json` already sets the build, output directory,
+routing and cron, so no framework preset is needed.
+
+Add these environment variables in **Project → Settings → Environment Variables**:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | pooled Postgres URL |
+| `DIRECT_URL` | direct Postgres URL |
+| `ENCRYPTION_KEY` | from step 2 |
+| `SESSION_PEPPER` | from step 2 |
+| `CRON_SECRET` | from step 2 |
+| `TRUST_PROXY` | `true` — Vercel's edge sets `X-Forwarded-For` |
+| `NODE_ENV` | `production` |
+
+Deploy. The build runs `prisma migrate deploy`, which creates all 19 tables on first deploy
+and applies only new changes afterwards.
+
+### 4. Claim your account immediately
+
+There is no sign-up page: **the first visitor to reach the site creates the single admin
+account**, and the endpoint refuses forever after. Open your deployment and create yours
+before anyone else finds the URL.
+
+### What changes on Vercel
+
+| | Self-hosted | Vercel |
+| --- | --- | --- |
+| Database | Postgres you run | Postgres you host (Neon/Supabase/…) |
+| Backup **files** | Written daily to `data/backups/` | Unavailable — no durable disk |
+| Export / import / restore | Works | Works, through your browser |
+| Scheduled housekeeping | In-process timer, every 15 min | Vercel Cron, daily |
+| Rate limits | In memory | Credential limits shared via the database |
+| IP blocks | In memory + database | Database, so every instance agrees |
+
+The only real loss is server-written backup files. **Use Settings → Data → Full export (JSON)
+regularly** — it contains everything, and Restore takes it back.
+
+### The privacy trade-off, stated plainly
+
+The original design kept every task title on your own machine. Hosting it means your data now
+lives on Vercel's compute and your database provider's servers. It is still a single private
+account behind a password, 2FA and the abuse protection — but "nothing ever leaves my
+machine" is no longer true. That is the price of 24/7 access from your phone without leaving a
+laptop running, and it is a reasonable trade — it should just be a knowing one.
+
+---
+
 ## Deploying to your own server
 
-TarangOS is a stateful app that owns a SQLite file on disk. That rules out serverless hosts
-(Vercel, Netlify, Cloudflare Pages) — their filesystems are ephemeral and every request may
-land on a different instance, so your database would silently vanish. Deploy it to a machine
-with persistent disk: a VPS, a home server, or a Raspberry Pi.
+If you would rather keep the data on hardware you control, deploy to a machine with a real
+disk: a VPS, a home server, or a Raspberry Pi. You still need Postgres, but it can be a
+container on the same box.
 
 ### 1. Get the code and build
 
@@ -326,7 +403,7 @@ rather than for account recovery convenience.
 | **Cross-origin** | Non-same-origin mutating requests are rejected outright. |
 | **Headers** | Strict CSP with no `unsafe-eval`, `frame-ancestors 'none'`, `no-referrer`, HSTS when TLS is on, and `noindex` on every response. |
 | **Audit trail** | Every sign-in, lock, unlock, credential change, backup and restore is logged with IP and timestamp, visible under Settings → Security. |
-| **Data at rest** | A single SQLite file on your disk. Nothing is transmitted anywhere. The service worker deliberately never caches API responses. |
+| **Data at rest** | A Postgres database you choose and control. The service worker deliberately never caches API responses. |
 | **Restores** | Rewriting your data requires re-entering your password, and a safety backup is taken first. |
 | **Dependencies** | All crypto uses Node's built-in `crypto`. No native modules, no password-hashing add-ons, and a deliberately small dependency tree. |
 
@@ -511,17 +588,21 @@ Copy `.env.example` to `.env` and edit. Every value has a working default.
 
 ```
 .
-├── docker-compose.yml       one-command deployment
+├── vercel.json              serverless build, routing and cron
+├── api/index.ts             Vercel function wrapping the Express app
+├── docker-compose.yml       one-command self-hosted deployment
 ├── Dockerfile               multi-stage build (web + server → one image)
 ├── data/                    YOUR DATA — database, backups, secrets (git-ignored)
 ├── server/
-│   ├── prisma/schema.prisma full data model
+│   ├── prisma/schema.prisma full data model (Postgres)
+│   ├── prisma/migrations/    generated SQL, applied by `prisma migrate deploy`
 │   ├── test/smoke.mjs       58-check end-to-end API test
 │   └── src/
 │       ├── config.ts        env + secret bootstrapping
 │       ├── index.ts         express app, CSP, static SPA, TLS
 │       ├── scheduler.ts     daily backups, session purge, recurrence top-up
-│       ├── lib/             crypto, session, metrics, recurrence, quick-capture, backup
+│       ├── lib/             crypto, session, metrics, recurrence, quick-capture,
+│       │                    backup, abuse, net, rateStore, notifications
 │       ├── middleware/      auth, CSRF, origin guard, rate limits
 │       ├── routes/          auth, tasks, org, goals, habits, focus, notes,
 │       │                    reviews, dashboard, analytics, settings, backup
@@ -625,6 +706,23 @@ four taps instead of a full password.
 **Recurring tasks are not appearing in Upcoming.**
 Occurrences are generated 30 days ahead whenever the dashboard loads and every 15 minutes by the
 scheduler. Force it from Settings, or restart the server.
+
+**Vercel build fails with "Environment variable not found: DATABASE_URL".**
+The build runs migrations, so `DATABASE_URL` and `DIRECT_URL` must exist at build time as well
+as runtime. Make sure both are set for the Production environment, then redeploy.
+
+**Vercel deploy succeeds but every request 500s.**
+Check the function logs. The two usual causes are missing `ENCRYPTION_KEY`/`SESSION_PEPPER`
+(TarangOS refuses to start without them on serverless, and says so), or a `DATABASE_URL` your
+database rejects — most providers require `?sslmode=require`.
+
+**Signed out at random on Vercel.**
+`SESSION_PEPPER` is not set, or changed between deploys. It is mixed into your password hash,
+so it must be a fixed environment variable that never changes.
+
+**"Too many connections" from the database.**
+Use the *pooled* connection string for `DATABASE_URL`. On Neon that is the `-pooler` host; on
+Supabase it is the connection-pooling port. Keep the direct one for `DIRECT_URL` only.
 
 **Port 4517 is already in use.**
 Set `PORT` to something else, and update the compose port mapping to match.

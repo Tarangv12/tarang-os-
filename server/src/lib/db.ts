@@ -1,34 +1,47 @@
 import { PrismaClient } from '@prisma/client';
 import { config } from '../config';
 
-export const prisma = new PrismaClient({
-  log: config.isProd ? ['warn', 'error'] : ['warn', 'error'],
-});
+/**
+ * Database client.
+ *
+ * On a long-running server this is a plain singleton. On serverless it matters
+ * more than it looks: every cold start would otherwise open a new pool, and a
+ * Postgres instance will refuse connections long before traffic becomes
+ * interesting. Caching the client on `globalThis` means warm invocations reuse
+ * the same one, and the pooled connection string keeps the count bounded.
+ */
+
+const globalForPrisma = globalThis as unknown as { tarangosPrisma?: PrismaClient };
+
+export const prisma =
+  globalForPrisma.tarangosPrisma ??
+  new PrismaClient({
+    log: config.isProd ? ['warn', 'error'] : ['warn', 'error'],
+  });
+
+if (!config.isProd || config.isServerless) {
+  globalForPrisma.tarangosPrisma = prisma;
+}
 
 /**
- * SQLite pragmas: WAL for concurrent reads, FK enforcement, durable commits.
- * Some pragmas return a row (journal_mode) and some do not, so each is issued
- * as a query and failures are tolerated rather than blocking startup.
+ * Confirms the database is reachable before the server announces itself.
+ *
+ * Postgres needs no per-connection setup, unlike the SQLite pragmas this
+ * replaced — pooling, durability and foreign keys are all server-side concerns
+ * there. On serverless this is skipped: paying a round trip on every cold start
+ * to learn something the first real query would tell us is not worth it.
  */
-const PRAGMAS = [
-  'PRAGMA journal_mode = WAL;',
-  'PRAGMA foreign_keys = ON;',
-  'PRAGMA synchronous = NORMAL;',
-  'PRAGMA busy_timeout = 5000;',
-];
-
 export async function initDatabase(): Promise<void> {
-  for (const pragma of PRAGMAS) {
-    try {
-      await prisma.$queryRawUnsafe(pragma);
-    } catch {
-      try {
-        await prisma.$executeRawUnsafe(pragma);
-      } catch {
-        // eslint-disable-next-line no-console
-        console.warn(`[tarangos] could not apply "${pragma}"`);
-      }
-    }
+  if (config.isServerless) return;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (err) {
+    const message = (err as Error).message ?? String(err);
+    throw new Error(
+      `Could not reach the database.\n` +
+        `  DATABASE_URL must point at a Postgres instance.\n` +
+        `  Underlying error: ${message}`,
+    );
   }
 }
 

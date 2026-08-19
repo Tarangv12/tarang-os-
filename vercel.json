@@ -1,0 +1,39 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "web/dist",
+  "installCommand": "npm install && npm --prefix server install && npm --prefix web install",
+
+  "functions": {
+    "api/index.ts": {
+      "memory": 1024,
+      "maxDuration": 30,
+      "//": "The schema and the generated query engine must be bundled with the function, or it starts and immediately fails looking for them.",
+      "includeFiles": "server/{prisma/**,node_modules/.prisma/client/**}"
+    }
+  },
+
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/robots.txt", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+
+  "crons": [
+    {
+      "path": "/api/cron/housekeeping",
+      "schedule": "0 3 * * *"
+    }
+  ],
+
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    }
+  ]
+}

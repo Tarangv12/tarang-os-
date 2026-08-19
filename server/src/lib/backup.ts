@@ -87,7 +87,30 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 }
 
+/**
+ * Whether backup *files* are meaningful in this deployment.
+ *
+ * On serverless there is no durable disk, so a written file would vanish with
+ * the invocation. Export and restore still work end to end — they just move
+ * through the browser rather than through the server's filesystem.
+ */
+export function fileBackupsAvailable(): boolean {
+  return config.hasPersistentDisk;
+}
+
+export class BackupsUnavailableError extends Error {
+  constructor() {
+    super(
+      'Server-side backup files are not available on this deployment, because it has no ' +
+        'persistent disk. Use Export (JSON) to download a full backup instead — it contains ' +
+        'exactly the same data and can be restored from the same screen.',
+    );
+    this.name = 'BackupsUnavailableError';
+  }
+}
+
 export async function writeBackupFile(userId: string, kind: 'auto' | 'manual' = 'manual'): Promise<{ filename: string; size: number; counts: Record<string, number> }> {
+  if (!fileBackupsAvailable()) throw new BackupsUnavailableError();
   const payload = await buildBackup(userId);
   const filename = `tarangos-${kind}-${stamp()}.json`;
   const filePath = path.join(config.backupDir, filename);
@@ -98,6 +121,7 @@ export async function writeBackupFile(userId: string, kind: 'auto' | 'manual' = 
 }
 
 export async function listBackups() {
+  if (!fileBackupsAvailable()) return [];
   const entries = await fs.readdir(config.backupDir).catch(() => [] as string[]);
   const files = entries.filter((f) => f.endsWith('.json') && f.startsWith('tarangos-'));
   const stats = await Promise.all(

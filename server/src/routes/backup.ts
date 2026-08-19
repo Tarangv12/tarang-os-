@@ -9,8 +9,10 @@ import { heavyLimiter } from '../middleware/rateLimit';
 import { audit } from '../lib/audit';
 import { verifySecret } from '../lib/crypto';
 import {
+  BackupsUnavailableError,
   buildBackup,
   exportTasksCsv,
+  fileBackupsAvailable,
   listBackups,
   parseCsv,
   pruneBackups,
@@ -44,6 +46,9 @@ backupRouter.get(
       directory: config.backupDir,
       autoDaily: config.backup.autoDaily,
       keep: config.backup.keep,
+      // The UI hides the server-side backup panel when this is false and points
+      // at Export instead, rather than offering a button that cannot work.
+      fileBackupsAvailable: fileBackupsAvailable(),
     });
   }),
 );
@@ -51,6 +56,7 @@ backupRouter.get(
 backupRouter.post(
   '/',
   ah(async (req, res) => {
+    if (!fileBackupsAvailable()) throw ApiError.badRequest(new BackupsUnavailableError().message);
     const result = await writeBackupFile(req.user!.id, 'manual');
     audit(req, 'backup.created', { userId: req.user!.id, detail: result.filename });
     res.status(201).json(result);
@@ -170,15 +176,20 @@ backupRouter.post(
       throw ApiError.badRequest((err as Error).message);
     }
 
-    // Safety net before a destructive restore.
-    const safety = await writeBackupFile(req.user!.id, 'auto');
+    // Safety net before a destructive restore. Where no disk survives, the
+    // restore still runs — but the caller is told plainly that there is no
+    // automatic undo, so "replace" is not silently more dangerous than it looks.
+    let safetyBackup: string | null = null;
+    if (fileBackupsAvailable()) {
+      safetyBackup = (await writeBackupFile(req.user!.id, 'auto')).filename;
+    }
     const created = await restoreBackup(req.user!.id, payload as never, body.mode);
 
     audit(req, 'backup.restored', {
       userId: req.user!.id,
       detail: `${body.mode} from ${body.filename ?? 'upload'}`,
     });
-    res.json({ ok: true, mode: body.mode, restored: created, safetyBackup: safety.filename });
+    res.json({ ok: true, mode: body.mode, restored: created, safetyBackup });
   }),
 );
 

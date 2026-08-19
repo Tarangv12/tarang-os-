@@ -164,9 +164,9 @@ tasksRouter.get(
       const term = q.search.trim();
       and.push({
         OR: [
-          { title: { contains: term } },
-          { description: { contains: term } },
-          { notes: { contains: term } },
+          { title: { contains: term, mode: 'insensitive' } },
+          { description: { contains: term, mode: 'insensitive' } },
+          { notes: { contains: term, mode: 'insensitive' } },
         ],
       });
     }
@@ -703,7 +703,7 @@ tasksRouter.post(
     let projectId: string | null = null;
     if (parsed.projectHint) {
       const project = await prisma.project.findFirst({
-        where: { userId: user.id, name: { contains: parsed.projectHint } },
+        where: { userId: user.id, name: { contains: parsed.projectHint, mode: 'insensitive' } },
         select: { id: true },
       });
       projectId = project?.id ?? null;
@@ -713,7 +713,7 @@ tasksRouter.post(
     const categoryName = parsed.categoryHint || settings.quickCaptureDefaults.category;
     if (categoryName) {
       const category = await prisma.category.findFirst({
-        where: { userId: user.id, name: { contains: categoryName } },
+        where: { userId: user.id, name: { contains: categoryName, mode: 'insensitive' } },
         select: { id: true },
       });
       categoryId =

@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { rateLimitKey } from '../lib/net';
 import { flagOffence } from './abuse';
 import { audit } from '../lib/audit';
+import { PrismaRateStore } from '../lib/rateStore';
 
 /**
  * Tiered rate limiting.
@@ -16,8 +17,18 @@ import { audit } from '../lib/audit';
  * long enough gets blocked outright rather than being allowed to retry forever.
  */
 
-function makeLimiter(name: string, options: Partial<Options> & { windowMs: number; limit: number }) {
+/**
+ * `shared: true` counts in the database so the limit holds across every
+ * instance. Reserved for the credential endpoints, where correctness is worth
+ * a round trip; the high-volume limiters stay in memory as flood control.
+ */
+function makeLimiter(
+  name: string,
+  options: Partial<Options> & { windowMs: number; limit: number; shared?: boolean },
+) {
+  const { shared, ...rest } = options;
   return rateLimit({
+    ...(shared ? { store: new PrismaRateStore(name) } : {}),
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     keyGenerator: rateLimitKey,
@@ -37,7 +48,7 @@ function makeLimiter(name: string, options: Partial<Options> & { windowMs: numbe
         },
       });
     },
-    ...options,
+    ...rest,
   });
 }
 
@@ -52,6 +63,7 @@ export const loginLimiter = makeLimiter('login', {
   windowMs: 15 * 60_000,
   limit: 10,
   skipSuccessfulRequests: true,
+  shared: true,
 });
 
 /** Short unlock codes deserve an even smaller budget than passwords. */
@@ -59,6 +71,7 @@ export const unlockLimiter = makeLimiter('unlock', {
   windowMs: 10 * 60_000,
   limit: 12,
   skipSuccessfulRequests: true,
+  shared: true,
 });
 
 /**
@@ -69,6 +82,7 @@ export const unlockLimiter = makeLimiter('unlock', {
 export const signupLimiter = makeLimiter('signup', {
   windowMs: 60 * 60_000,
   limit: 5,
+  shared: true,
 });
 
 /** Everything else under /api. Generous enough to be invisible in real use. */
@@ -123,4 +137,5 @@ export const generationLimiter = makeLimiter('generation', {
 export const heavyLimiter = makeLimiter('bulk-data', {
   windowMs: 60 * 60_000,
   limit: 20,
+  shared: true,
 });

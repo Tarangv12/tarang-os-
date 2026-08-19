@@ -3,11 +3,19 @@
 
 generator client {
   provider = "prisma-client-js"
+  // "native" for local development; the rhel target is what Vercel's Node
+  // runtime needs, and must be generated at build time or the function will
+  // fail to start with a missing-query-engine error.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider = "postgresql"
+  // Pooled connection (PgBouncer) — what the serverless functions use.
+  url       = env("DATABASE_URL")
+  // Direct connection, required for migrations, which cannot run through a
+  // transaction pooler. Falls back to DATABASE_URL when not set.
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +76,20 @@ model Session {
   label         String    @default("")
 
   @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Rate-limit counters, shared across processes.
+///
+/// A limiter that counts in memory is per-instance. On a single server that is
+/// the same thing; spread across serverless functions it means an attacker gets
+/// a fresh budget on every cold start. The security-critical limiters count
+/// here instead, so the limit means the same thing everywhere.
+model RateBucket {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
   @@index([expiresAt])
 }
 
