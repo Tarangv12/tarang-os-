@@ -235,7 +235,16 @@ async function main() {
   process.on('SIGTERM', () => void close('SIGTERM'));
 }
 
-if (require.main === module) {
+/**
+ * Only start a listener when run as a program.
+ *
+ * The serverless entry imports `createApp` from this file, and a bundler can
+ * collapse everything into a single module where `require.main === module` is
+ * no longer a reliable "am I the entry point" test. Binding a port inside a
+ * serverless function would fail the invocation, so the platform check makes
+ * the intent explicit rather than relying on bundler behaviour.
+ */
+if (require.main === module && !config.isServerless) {
   main().catch((err) => {
     // eslint-disable-next-line no-console
     console.error('[tarangos] failed to start:', err);
