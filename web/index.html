@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="TarangOS — a private, secure personal productivity system." />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+
+    <!-- iOS home-screen app -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TarangOS" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <title>TarangOS</title>
+
+    <!-- Applies the saved theme before first paint. External (not inline) so the
+         app can keep a strict script-src 'self' CSP with no 'unsafe-inline'. -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <div style="font-family: system-ui, sans-serif; padding: 2rem; text-align: center">
+        <h1>JavaScript is required</h1>
+        <p>TarangOS is an offline-capable app and needs JavaScript enabled.</p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

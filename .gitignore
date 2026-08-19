@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+*.tsbuildinfo
+
+# --- Your data. Never commit any of this. ---------------------------------
+data/
+*.db
+*.db-shm
+*.db-wal
+.secrets.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# TLS material
+*.pem
+*.key
+*.crt
+certs/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+logs/

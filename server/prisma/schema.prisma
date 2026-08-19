@@ -1,0 +1,417 @@
+// TarangOS — data model
+// Single-tenant by design: exactly one User row is permitted (enforced in application layer).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & security
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String    @id @default(cuid())
+  username          String    @unique
+  displayName       String    @default("")
+  passwordHash      String
+  pinHash           String?
+  totpSecret        String? // AES-256-GCM encrypted
+  totpEnabled       Boolean   @default(false)
+  recoveryCodes     String? // JSON array of scrypt hashes
+  theme             String    @default("system") // system | light | dark
+  accent            String    @default("indigo")
+  timezone          String    @default("Asia/Kolkata")
+  settings          String    @default("{}") // JSON blob of user preferences
+  /// Date each fixed-time notification last fired, so a daily nudge cannot
+  /// double-fire across reloads or devices. JSON: { "daily_agenda": "2026-08-19" }
+  notifyState       String    @default("{}")
+  failedLogins      Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  sessions      Session[]
+  tasks         Task[]
+  categories    Category[]
+  tags          Tag[]
+  projects      Project[]
+  goals         Goal[]
+  habits        Habit[]
+  focusSessions FocusSession[]
+  reviews       Review[]
+  notes         Note[]
+  dayStats      DayStat[]
+  auditLogs     AuditLog[]
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash     String    @unique // sha256 of the opaque cookie token
+  csrfToken     String
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime // sliding expiry
+  absoluteExpiresAt DateTime // hard ceiling, never extended
+  lockedAt      DateTime? // idle auto-lock; requires PIN/password to resume
+  revokedAt     DateTime?
+  ip            String    @default("")
+  userAgent     String    @default("")
+  label         String    @default("")
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Temporarily blocked sources. Persisted so a restart does not hand an
+/// attacker a clean slate, and so repeat offenders escalate across sessions.
+model BlockedIp {
+  id         String   @id @default(cuid())
+  ip         String   @unique
+  reason     String
+  detail     String   @default("")
+  /// How many separate blocks this source has earned — drives the escalation.
+  strikes    Int      @default(1)
+  /// Offences recorded since the current block began.
+  hits       Int      @default(1)
+  userAgent  String   @default("")
+  blockedAt  DateTime @default(now())
+  expiresAt  DateTime
+  lastSeenAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id     String   @id @default(cuid())
+  userId String?
+  user   User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action String
+  detail String   @default("")
+  ip     String   @default("")
+  ok     Boolean  @default(true)
+  at     DateTime @default(now())
+
+  @@index([at])
+  @@index([action])
+}
+
+// ---------------------------------------------------------------------------
+// Organisation
+// ---------------------------------------------------------------------------
+
+model Category {
+  id     String  @id @default(cuid())
+  userId String
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name   String
+  color  String  @default("#6366f1")
+  icon   String  @default("folder")
+  order  Int     @default(0)
+  tasks  Task[]
+
+  @@unique([userId, name])
+}
+
+model Tag {
+  id     String    @id @default(cuid())
+  userId String
+  user   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name   String
+  color  String    @default("#64748b")
+  tasks  TaskTag[]
+
+  @@unique([userId, name])
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+  @@index([tagId])
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String    @default("")
+  color       String    @default("#6366f1")
+  icon        String    @default("layers")
+  status      String    @default("active") // active | paused | done
+  startDate   String? // YYYY-MM-DD
+  targetDate  String?
+  archivedAt  DateTime?
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tasks Task[]
+  goals Goal[]
+  notes Note[]
+
+  @@index([userId])
+}
+
+model Goal {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String    @default("")
+  type        String    @default("monthly") // daily | weekly | monthly | quarterly | longterm
+  status      String    @default("active") // active | done | dropped
+  metricType  String    @default("milestones") // milestones | tasks | numeric
+  targetValue Float     @default(0)
+  currentValue Float    @default(0)
+  unit        String    @default("")
+  startDate   String?
+  targetDate  String?
+  completedAt DateTime?
+  color       String    @default("#8b5cf6")
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  projectId  String?
+  project    Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  milestones Milestone[]
+  tasks      Task[]
+  notes      Note[]
+
+  @@index([userId])
+}
+
+model Milestone {
+  id         String    @id @default(cuid())
+  goalId     String
+  goal       Goal      @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  title      String
+  done       Boolean   @default(false)
+  targetDate String?
+  doneAt     DateTime?
+  order      Int       @default(0)
+
+  @@index([goalId])
+}
+
+// ---------------------------------------------------------------------------
+// Tasks
+// ---------------------------------------------------------------------------
+
+model Task {
+  id          String @id @default(cuid())
+  userId      String
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String @default("")
+  notes       String @default("")
+
+  date      String // YYYY-MM-DD — the day this task is planned for
+  startTime String? // HH:MM
+  dueTime   String? // HH:MM
+  priority  String  @default("medium") // urgent | high | medium | low
+  status    String  @default("pending") // pending | in_progress | completed | archived
+  energy    String  @default("medium") // high | medium | low
+
+  estimatedMinutes Int @default(0)
+  actualMinutes    Int @default(0)
+
+  reminderAt            DateTime?
+  reminderMinutesBefore Int?
+  reminderSentAt        DateTime?
+
+  recurrenceRule     String? // JSON RecurrenceRule
+  recurrenceParentId String?
+  recurrenceParent   Task?   @relation("TaskSeries", fields: [recurrenceParentId], references: [id], onDelete: SetNull)
+  recurrenceChildren Task[]  @relation("TaskSeries")
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  projectId  String?
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  goalId     String?
+  goal       Goal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  completedAt    DateTime?
+  archivedAt     DateTime?
+  postponedCount   Int    @default(0)
+  originalDate     String?
+  postponeHistory  String @default("[]") // JSON array of dates this task was moved off
+  missReason     String    @default("")
+  order          Int       @default(0)
+  pinned         Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subtasks      Subtask[]
+  tags          TaskTag[]
+  focusSessions FocusSession[]
+  notesLinked   Note[]
+
+  @@index([userId, date])
+  @@index([userId, status])
+  @@index([projectId])
+  @@index([goalId])
+}
+
+model Subtask {
+  id     String    @id @default(cuid())
+  taskId String
+  task   Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title  String
+  done   Boolean   @default(false)
+  doneAt DateTime?
+  order  Int       @default(0)
+
+  @@index([taskId])
+}
+
+// ---------------------------------------------------------------------------
+// Habits
+// ---------------------------------------------------------------------------
+
+model Habit {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  description  String    @default("")
+  cadence      String    @default("daily") // daily | weekly
+  targetPerWeek Int      @default(7)
+  targetValue  Float     @default(1)
+  unit         String    @default("")
+  color        String    @default("#10b981")
+  icon         String    @default("check")
+  reminderTime String? // HH:MM
+  startDate    String?
+  archivedAt   DateTime?
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  entries HabitEntry[]
+
+  @@index([userId])
+}
+
+model HabitEntry {
+  id      String   @id @default(cuid())
+  habitId String
+  habit   Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  date    String // YYYY-MM-DD
+  done    Boolean  @default(true)
+  value   Float    @default(1)
+  note    String   @default("")
+  at      DateTime @default(now())
+
+  @@unique([habitId, date])
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Focus
+// ---------------------------------------------------------------------------
+
+model FocusSession {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId         String?
+  task           Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  date           String // YYYY-MM-DD
+  mode           String    @default("focus") // focus | short_break | long_break
+  plannedMinutes Int       @default(25)
+  actualMinutes  Int       @default(0)
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  completed      Boolean   @default(false)
+  interruptions  Int       @default(0)
+  note           String    @default("")
+
+  @@index([userId, date])
+}
+
+// ---------------------------------------------------------------------------
+// Reviews, notes, rollups
+// ---------------------------------------------------------------------------
+
+model Review {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String   @default("daily") // daily | weekly
+  date         String // YYYY-MM-DD (week reviews use the Monday)
+  wentWell     String   @default("")
+  missedWhy    String   @default("")
+  missReasons  String   @default("[]") // JSON array of reason codes
+  distractions String   @default("")
+  lessons      String   @default("")
+  improvements String   @default("")
+  gratitude    String   @default("")
+  rating       Int      @default(0) // 1..5
+  mood         String   @default("")
+  energy       Int      @default(0) // 1..5
+  snapshot     String   @default("{}") // JSON metrics captured at review time
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, type, date])
+  @@index([userId, date])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   @default("")
+  content   String   @default("")
+  date      String? // YYYY-MM-DD when the note is journal-style
+  pinned    Boolean  @default(false)
+  color     String   @default("")
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  goalId    String?
+  goal      Goal?    @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, date])
+}
+
+/// Cached per-day rollup so 6-month history stays fast. Recomputed for "today"
+/// on demand and frozen once the day has passed.
+model DayStat {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           String
+  planned        Int      @default(0)
+  completed      Int      @default(0)
+  missed         Int      @default(0)
+  postponed      Int      @default(0)
+  focusMinutes   Int      @default(0)
+  habitsDone     Int      @default(0)
+  habitsPlanned  Int      @default(0)
+  score          Int      @default(0)
+  breakdown      String   @default("{}")
+  computedAt     DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([date])
+}
