@@ -8,7 +8,6 @@
     "api/index.ts": {
       "memory": 1024,
       "maxDuration": 30,
-      "//": "The schema and the generated query engine must be bundled with the function, or it starts and immediately fails looking for them.",
       "includeFiles": "server/{prisma/**,node_modules/.prisma/client/**}"
     }
   },
