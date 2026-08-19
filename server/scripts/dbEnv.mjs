@@ -55,6 +55,34 @@ export function describePlaceholder(url) {
   return null;
 }
 
+/**
+ * Any Postgres URL in the environment, whatever it is called.
+ *
+ * Vercel lets you pick a "Custom Prefix" when creating a database, which
+ * renames every injected variable (STORAGE_URL, MYDB_URL, and so on). Rather
+ * than making that choice matter, we fall back to scanning for a value that is
+ * plainly a Postgres connection string.
+ *
+ * Variables naming an unpooled connection are classified as direct, since those
+ * are the ones migrations need.
+ */
+function scanForPostgresUrls() {
+  const pooled = [];
+  const direct = [];
+
+  for (const [key, raw] of Object.entries(process.env)) {
+    const value = raw?.trim();
+    if (!value || !/^postgres(ql)?:\/\//i.test(value)) continue;
+    if (describePlaceholder(value)) continue;
+    (/(UNPOOLED|NON_POOLING|DIRECT)/i.test(key) ? direct : pooled).push({ key, value });
+  }
+
+  // Deterministic across runs: environment order is not guaranteed.
+  pooled.sort((a, b) => a.key.localeCompare(b.key));
+  direct.sort((a, b) => a.key.localeCompare(b.key));
+  return { pooled, direct };
+}
+
 /** First variable holding a usable connection string; unusable ones are skipped. */
 function firstUsable(keys) {
   const rejected = [];
@@ -102,14 +130,26 @@ function noDatabaseError(rejected) {
  * variables are actually present and usable. Returns a summary for logging.
  */
 export function resolveDatabaseEnv() {
-  const pooled = firstUsable(POOLED_KEYS);
+  let pooled = firstUsable(POOLED_KEYS);
+  const scanned = scanForPostgresUrls();
+
+  // Nothing under a name we know: accept any Postgres URL that is present, so a
+  // custom prefix on the database integration does not need configuring here.
+  if (!pooled.value && scanned.pooled.length) {
+    pooled = { ...scanned.pooled[0], rejected: pooled.rejected };
+    console.warn(`[tarangos] using ${pooled.key}, found by scanning for a Postgres URL`);
+  }
+
   if (!pooled.value) throw noDatabaseError(pooled.rejected);
 
   for (const r of pooled.rejected) {
     console.warn(`[tarangos] ignoring ${r.key}: ${r.problem}. Using ${pooled.key} instead.`);
   }
 
-  const direct = firstUsable(DIRECT_KEYS);
+  let direct = firstUsable(DIRECT_KEYS);
+  if (!direct.value && scanned.direct.length) {
+    direct = { ...scanned.direct[0], rejected: direct.rejected };
+  }
 
   process.env.DATABASE_URL = pooled.value;
   process.env.DIRECT_URL = direct.value ?? pooled.value;

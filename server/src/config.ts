@@ -90,7 +90,28 @@ function firstUsableEnv(keys: string[]): string | undefined {
   return undefined;
 }
 
-const resolvedDatabaseUrl = firstUsableEnv(POOLED_KEYS);
+/**
+ * Any Postgres URL in the environment, whatever it is called.
+ *
+ * Vercel lets you choose a "Custom Prefix" when creating a database, renaming
+ * every injected variable (STORAGE_URL, MYDB_URL, ...). Scanning for a value
+ * that is plainly a Postgres connection string means that choice does not have
+ * to be configured here. Mirrors scripts/dbEnv.mjs.
+ */
+function scanForPostgresUrl(wantDirect: boolean): string | undefined {
+  const found: string[] = [];
+  for (const [key, raw] of Object.entries(process.env)) {
+    const value = raw?.trim();
+    if (!value || !/^postgres(ql)?:\/\//i.test(value)) continue;
+    if (placeholderReason(value)) continue;
+    const isDirect = /(UNPOOLED|NON_POOLING|DIRECT)/i.test(key);
+    if (isDirect === wantDirect) found.push(key);
+  }
+  found.sort();
+  return found.length ? process.env[found[0]]?.trim() : undefined;
+}
+
+const resolvedDatabaseUrl = firstUsableEnv(POOLED_KEYS) ?? scanForPostgresUrl(false);
 
 if (!resolvedDatabaseUrl) {
   throw new Error(
@@ -104,7 +125,7 @@ if (!resolvedDatabaseUrl) {
 // Prisma needs a direct (unpooled) connection for migrations, because a
 // transaction pooler cannot run them. Most setups have one URL that does both.
 process.env.DATABASE_URL = resolvedDatabaseUrl;
-process.env.DIRECT_URL = firstUsableEnv(DIRECT_KEYS) ?? resolvedDatabaseUrl;
+process.env.DIRECT_URL = firstUsableEnv(DIRECT_KEYS) ?? scanForPostgresUrl(true) ?? resolvedDatabaseUrl;
 
 /**
  * Serverless platforms (Vercel, Netlify, Lambda) give you a read-only
